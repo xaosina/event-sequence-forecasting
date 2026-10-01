@@ -2,7 +2,7 @@
 
 Official code for the NeurIPS 2026 paper (Evaluations & Datasets Track).
 
-![Maximizing predictive metrics leads to unrealistic forecasts](assets/roulette_fork_plot.png)
+![Trade-off between TMS and cDFS at horizon 32](assets/tradeoff_h32.png)
 
 We study multi-horizon forecasting of event sequences with heterogeneous (numerical and categorical) features as a conditional generative modeling problem, and evaluate forecasts not only for prediction accuracy but also for distributional realism. The benchmark comprises metrics for both aspects, strong statistical baselines, recent generative models adapted from adjacent fields, and curated real-world datasets. Each axis has a headline score and finer-grained metrics:
 - **Prediction accuracy**: the Temporal Matching Score (**TMS**) aggregates all features at once; matched and paired per-feature submetrics (R1 for time and amounts, F1 for categories) show where the error comes from.
