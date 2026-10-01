@@ -1,0 +1,15 @@
+# Visual-only evaluation: one batch, no expensive metrics, samples kept on disk
+# so cross-model figures can be assembled offline (scripts/visual_figures.py).
+evaluator:
+  devices:
+    - ${device}
+    - ${device}
+    - ${device}
+  metrics:
+    - Visualization: {"log_amnt": True}
+  blim: 1
+  keep_samples: True
+data_conf:
+  # Every model must see the identical first batch, and the final runs disagree
+  # on batch_size (detpp/ar use 32, the rest 128), so pin it here.
+  batch_size: 32

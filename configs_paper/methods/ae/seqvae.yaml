@@ -1,0 +1,53 @@
+evaluator:
+  devices: ["cuda:1", "cuda:2"]
+  topk: 1
+  temperature: 1.
+  metrics:
+    - Reconstruction
+    - OTD: {max_shift: 0, detailed: True}
+
+trainer:
+  grad_clip: 1.
+
+data_conf:
+  min_history_len: 2 # Minimum 2, or will break metrics R2
+  train_random_end: index
+  train_transforms:
+    'time_diff':
+
+# MODEL
+model:
+  name: SeqVAE
+  autoencoder:
+    name: VAE
+    params:
+      use_time: True
+      num_layers: 3
+      d_token: 8
+      n_head: 1
+      factor: 32
+      linear_num: True
+    pretrain: True
+    frozen: False
+    checkpoint:
+    batch_transforms:
+  latent_encoder:
+
+optimizer:
+  name: AdamW
+  params:
+    lr: 1.e-4
+
+schedulers:
+  "beta":
+    BetaScheduler:
+      init_beta: 0.01
+      factor: 0.7
+      patience: 5
+      min_beta: 0.00001
+      verbose: True
+
+loss:
+  name: SeqVAELoss
+  params:
+    num_loss: mae

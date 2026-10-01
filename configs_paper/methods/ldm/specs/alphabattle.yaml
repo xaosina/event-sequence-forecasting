@@ -1,0 +1,4 @@
+model:
+  latent_encoder:
+    params:
+      hidden_size: 528

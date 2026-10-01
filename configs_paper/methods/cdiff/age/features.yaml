@@ -1,0 +1,13 @@
+model:
+  params:
+    diff_features: ["age", "small_group", "trans_date", "amount_rur"]
+
+data_conf:
+  train_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: False
+  val_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: False

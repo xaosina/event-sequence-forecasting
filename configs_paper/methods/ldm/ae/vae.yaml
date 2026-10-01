@@ -1,0 +1,19 @@
+model:
+  autoencoder:
+    name: VAE
+    params:
+      use_time: True
+      num_layers: 3
+      d_token: 8
+      n_head: 1
+      factor: 32
+    pretrain: False
+    frozen: True
+    checkpoint:
+    batch_transforms:
+      - TimeToDiff:
+          disable: False
+
+data_conf:
+  train_transforms:
+    'time_diff':

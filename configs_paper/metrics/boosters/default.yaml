@@ -1,0 +1,4 @@
+evaluator:
+  booster:
+    n_samples: 1
+    stategy: "default"

@@ -1,0 +1,6 @@
+evaluator:
+  booster:
+    n_samples: 30
+    stategy: "barybooster"
+    params:
+      matching: "global"

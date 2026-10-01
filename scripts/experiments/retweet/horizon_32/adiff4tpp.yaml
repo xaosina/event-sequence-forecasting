@@ -1,0 +1,9 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  metrics/with_detection/retweet,
+  horizon/32,
+  methods/ldm/defaults,
+  methods/ldm/adiff4tpp/encoder,
+  methods/ldm/ae/vae,
+]

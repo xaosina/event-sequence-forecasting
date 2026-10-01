@@ -1,0 +1,10 @@
+evaluator:
+  booster:
+    n_samples: 16
+    stategy: "wasserstein_barybooster"
+    params:
+      use_original_space: False
+      post_process_output: True
+      max_iter: 100
+      verbose: False
+

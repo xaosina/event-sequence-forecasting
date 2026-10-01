@@ -1,0 +1,1 @@
+config_factory: [start, datasets/gender/gender, methods/ae/vae]

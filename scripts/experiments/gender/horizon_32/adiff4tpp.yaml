@@ -1,0 +1,13 @@
+config_factory: [
+  start,
+  datasets/gender/gender,
+  metrics/with_detection/gender,
+  horizon/32,
+  methods/ldm/defaults,
+  methods/ldm/adiff4tpp/encoder,
+  methods/ldm/ae/vae,
+]
+
+model:
+  autoencoder:
+    checkpoint: /home/transaction-generation/log/gen-paper/gender/ae/vae/lr/3.e-3/seed_0/ckpt/epoch__0104_-_loss__-0.01744.ckpt

@@ -1,0 +1,81 @@
+trainer:
+  metrics_on_train: False
+  grad_clip: 1
+  val_loss_resamples: 1
+
+data_conf:
+  batch_size: 32
+  train_random_end: none
+  train_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: False
+
+evaluator:
+  topk: -1
+  temperature: 1.
+
+optimizer:
+  name: AdamW
+  params:
+    lr: 1.e-4
+
+loss:
+  name: BaselineLoss
+  params:
+    num_loss: mae
+
+model:
+  name: AutoregressiveGenerator
+  autoencoder:
+    name: BaselineAE
+    params:
+      cat_emb_dim: 8
+      num_emb_dim: 8
+      num_norm: True
+      use_time: True
+    pretrain: False
+    frozen: False
+    checkpoint:
+    batch_transforms:
+
+
+  latent_encoder:
+    name: GPT
+    params:
+      max_len: ${data_conf.max_seq_len}
+      n_layer: 6
+      n_head: 8
+      n_embd: 512
+      dropout: 0.1
+      bias: True
+
+# data_conf.max_seq_len: 512
+
+optuna:
+  params:
+    n_trials: 100
+    n_startup_trials: 10
+    request_list: 
+      - 'optimizer.params.weight_decay': 1.5429769361370426e-13
+        'optimizer.params.lr': 0.00016912601015410544
+        'model.latent_encoder.params.hidden_size': 164
+        'model.latent_encoder.params.num_layers': 3
+        'model.latent_encoder.params.dropout': 0.1831228989111418
+        'model.autoencoder.params.num_norm': false
+        'model.autoencoder.params.cat_emb_dim': 41
+        'model.autoencoder.params.num_emb_dim': 60
+    target_metric: loss
+  suggestions:
+    - ["optimizer.params.weight_decay", ["suggest_float", {low: 1.e-8, high: 1.e-1, log: True}]]
+    - ["optimizer.params.lr", ["suggest_float", {low: 1.e-5, high: 0.1, log: True}]]
+
+    - ["model.latent_encoder.params.n_layer", [suggest_int, {low: 1, high: 12, log: False}]]
+    - ["model.latent_encoder.params.n_head", [suggest_categorical, {choices: [1, 2, 4, 8, 16]}]]
+    - ["model.latent_encoder.params.n_embd", [suggest_int, {low: 16, high: 960, log: False, step: 16}]]
+    - ["model.latent_encoder.params.dropout", [suggest_float, {low: 0, high: 0.6, log: False}]]
+    - ["model.latent_encoder.params.bias", [suggest_categorical, {choices: [True, False]}]]
+
+    - ["model.autoencoder.params.num_norm", ["suggest_categorical", {choices: [True, False]}]]
+    - ["model.autoencoder.params.cat_emb_dim", ["suggest_int", {low: 1, high: 128, log: False}]]
+    - ["model.autoencoder.params.num_emb_dim", ["suggest_int", {low: 1, high: 128, log: False}]]

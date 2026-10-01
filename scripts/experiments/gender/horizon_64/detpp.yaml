@@ -1,0 +1,7 @@
+config_factory: [
+  start,
+  datasets/gender/gender,
+  metrics/with_detection/gender,
+  horizon/64,
+  methods/detpp,
+]

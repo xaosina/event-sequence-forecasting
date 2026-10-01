@@ -1,0 +1,66 @@
+trainer:
+  total_iters: 1_000_000
+  total_epochs: null
+  ckpt_track_metric: 'loss'
+  iters_per_epoch: null
+  patience: 20
+  profiling: false
+  verbose: True
+  ckpt_resume: null
+
+evaluator:
+  metrics:
+    - OTD
+    - OTD: {focus_on: [time_since_start]}
+    - OTD: {focus_on: [type_event]}
+    - OTD: {max_shift: 0, focus_on: [time_since_start]}
+    - OTD: {max_shift: 0, focus_on: [type_event]}
+    - Cardinality
+
+data_conf:
+  dataset_name: retweet
+  cat_cardinalities:
+    - ["type_event", 3]
+  index_name: seq_idx
+  time_name: time_since_start
+  focus_on:
+  target_token: "type_event"
+
+  test_path: 'data/retweet/test'
+  train_path: 'data/retweet/train'
+  val_ratio: 0.15
+  num_workers: 4
+  train_resamples: 1
+  batch_size: 128
+
+  min_history_len: 4
+  generation_len: 4
+  max_seq_len: 260
+
+  padding_value: 0
+
+  train_random_end: time
+  val_random_end: time
+
+  train_transforms:
+    "rescale_time":
+      RescaleTime:
+        loc: 0.0
+        scale: 10
+    "time_diff":
+      TimeToDiff:
+        disable: True
+    "log_tfs": null
+    "vr_decimal": null
+    "3":
+      CutTargetSequence:
+        target_len: 0
+
+  val_transforms:
+    "rescale_time": ${data_conf.train_transforms.rescale_time}
+    "time_diff": ${data_conf.train_transforms.time_diff}
+    "log_tfs": ${data_conf.train_transforms.log_tfs}
+    "vr_decimal": ${data_conf.train_transforms.vr_decimal}
+    "3":
+      CutTargetSequence:
+        target_len: ${data_conf.generation_len}

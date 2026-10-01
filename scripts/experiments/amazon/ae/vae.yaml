@@ -1,0 +1,1 @@
+config_factory: [start, datasets/amazon/amazon, methods/ae/vae]

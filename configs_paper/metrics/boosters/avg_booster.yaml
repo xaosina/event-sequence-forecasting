@@ -1,0 +1,6 @@
+evaluator:
+  booster:
+    n_samples: 30
+    stategy: "avg_booster"
+    params:
+      post_process_output: True

@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/age/age,
+  metrics/with_detection/age,
+  methods/ar/gpt
+]

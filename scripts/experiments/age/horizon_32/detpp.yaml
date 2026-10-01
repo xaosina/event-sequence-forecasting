@@ -1,0 +1,7 @@
+config_factory: [
+  start,
+  datasets/age/age,
+  metrics/with_detection/age,
+  horizon/32,
+  methods/detpp,
+]

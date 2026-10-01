@@ -1,0 +1,34 @@
+model:
+  name: LatentDiffusionGenerator
+  latent_encoder:
+    name: ConditionalDiffusionEncoder
+    params:
+      generation_len: ${data_conf.generation_len}
+      reference_len: ${data_conf.generation_len} # another value is possible
+      denoiser_name: DiT # currently only DiT is supported
+      hidden_size: 512 ## must be the times of laten_size
+      depth: 6
+      cfg_p_uncond: 0.1
+      cfg_w: 1.
+      num_heads: 8
+      mlp_ratio: 4
+  params:
+    history_encoder:
+      name: AutoregressiveGenerator
+      latent_encoder:
+        name: GRU
+        params:
+          hidden_size: 512
+          num_layers: 1
+      autoencoder:
+        name: BaselineAE
+        params:
+          cat_emb_dim: 8
+          num_emb_dim: 8
+          num_norm: true
+          use_time: true
+        pretrain: false
+        frozen: False
+        batch_transforms:
+      pooler: last
+      params: null

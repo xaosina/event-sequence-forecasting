@@ -1,0 +1,80 @@
+trainer:
+  total_iters: 1_000_000
+  total_epochs: null
+  ckpt_track_metric: 'loss'
+  iters_per_epoch: null
+  patience: 20
+  profiling: false
+  verbose: True
+  ckpt_resume: null
+  val_loss_resamples: 3
+
+evaluator:
+  metrics:
+    - OTD
+    - OTD: {focus_on: [amount]}
+    - OTD: {focus_on: [event_time]}
+    - OTD: {focus_on: [mcc_code]}
+    - OTD: {focus_on: [tr_type]}
+    - OTD: {max_shift: 0, focus_on: [amount]}
+    - OTD: {max_shift: 0, focus_on: [event_time]}
+    - OTD: {max_shift: 0, focus_on: [mcc_code]}
+    - OTD: {max_shift: 0, focus_on: [tr_type]}
+    - OTD: {"log_cols": ["amount"]}
+    - OTD: {max_shift: 0, "log_cols": ["amount"]}
+    - Cardinality
+
+data_conf:
+  dataset_name: gender
+  cat_cardinalities:
+    - ["mcc_code", 185]
+    - ["tr_type", 78]
+  num_names:
+    - amount
+  index_name: customer_id
+  time_name: event_time
+  focus_on:
+  target_token: "mcc_code"
+  amount_feature: "amount"
+
+  train_path: 'data/gender/preprocessed/train'
+  test_path: 'data/gender/preprocessed/test'
+  val_ratio: 0.15
+  num_workers: 4
+  train_resamples: 1
+  val_resamples: 3
+  batch_size: 128
+
+  min_history_len: 4
+  generation_len: 4
+  max_seq_len: 512
+
+  padding_value: 0
+
+  train_random_end: time
+  val_random_end: time
+
+  train_transforms:
+    "rescale_time":
+      RescaleTime:
+        loc: 0.0
+        scale: 2
+    "time_diff":
+      TimeToDiff:
+        disable: True
+    "log_tfs":
+      Logarithm:
+        names: ["amount"]
+    "vr_decimal": null
+    "3":
+      CutTargetSequence:
+        target_len: 0
+
+  val_transforms:
+    "rescale_time": ${data_conf.train_transforms.rescale_time}
+    "time_diff": ${data_conf.train_transforms.time_diff}
+    "log_tfs": ${data_conf.train_transforms.log_tfs}
+    "vr_decimal": ${data_conf.train_transforms.vr_decimal}
+    "3":
+      CutTargetSequence:
+        target_len: ${data_conf.generation_len}

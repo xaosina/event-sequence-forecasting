@@ -1,0 +1,9 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  metrics/with_detection/retweet,
+  horizon/16,
+  methods/cdiff/defaults,
+  methods/cdiff/cdiff,
+  methods/cdiff/retweet/features,
+]

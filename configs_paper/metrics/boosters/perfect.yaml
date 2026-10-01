@@ -1,0 +1,6 @@
+evaluator:
+  booster:
+    n_samples: 10
+    stategy: "perfect"
+    params:
+      matching: "global"

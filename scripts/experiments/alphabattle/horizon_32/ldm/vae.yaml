@@ -1,0 +1,14 @@
+config_factory: [
+  start,
+  datasets/alphabattle/alphabattle,
+  metrics/with_detection/alphabattle,
+  horizon/32,
+  methods/ldm/defaults,
+  methods/ldm/encoder,
+  methods/ldm/ae/vae,
+  methods/ldm/specs/alphabattle,
+]
+
+model:
+  autoencoder:
+    checkpoint: /home/transaction-generation/log/gen-paper/alphabattle/ae/vae/lr/1.e-3/seed_0/ckpt/epoch__0075_-_loss__-0.008362.ckpt

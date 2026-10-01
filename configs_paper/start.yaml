@@ -1,0 +1,23 @@
+# Runner params:
+log_dir: log/gen-paper/${data_conf.dataset_name}
+device: "cuda:0"
+common_seed: 0
+
+evaluator:
+  devices: ["cuda:1", "cuda:2"]
+  topk: 1
+  temperature: 1.
+
+runner:
+  name: GenerationTrainer
+  run_type: simple
+  seed_keys:
+    - "common_seed"
+  params:
+    n_runs: 1
+    n_workers: 1
+  device_list:
+
+logging:
+  file_lvl: "info"
+  cons_lvl: "info"

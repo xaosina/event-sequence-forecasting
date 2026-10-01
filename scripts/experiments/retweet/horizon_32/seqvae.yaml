@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  horizon/32,
+  methods/ae/seqvae,
+]

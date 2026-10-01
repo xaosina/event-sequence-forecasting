@@ -1,0 +1,7 @@
+config_factory: [
+  start,
+  datasets/alphabattle/alphabattle,
+  metrics/with_detection/alphabattle,
+  horizon/16,
+  methods/multitoken,
+]

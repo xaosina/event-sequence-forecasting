@@ -1,0 +1,17 @@
+# MODEL
+model:
+  name: BaselineHistSampler
+
+data_conf:
+  train_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: False
+  val_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: False
+
+runner:
+  name: GenerationEvaluator
+  run_type: simple

@@ -1,0 +1,17 @@
+evaluator:
+  devices:
+   - ${device}
+   - ${device}
+   - ${device} # ALWAYS SET MORE THAN 1 DEVICE
+  keep_samples: True
+  metrics:
+    - OTD
+    - OTD: {"log_cols": ["amount_rur"]}
+    - Detection: {method: detector_ablation/gru_128_1l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/gru_512_1l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/gru_512_2l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/gru_1024_3l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/transformer_128_1l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/transformer_512_1l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/transformer_512_2l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}
+    - Detection: {method: detector_ablation/transformer_1024_3l, report_std: True, condition_len: "${data_conf.generation_len}", verbose: False}

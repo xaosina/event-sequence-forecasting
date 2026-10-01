@@ -1,0 +1,1091 @@
+"""
+Coverage and Gini Index were implemented following the approach described in https://www.mdpi.com/2078-2489/16/2/151
+"""
+
+import collections
+from abc import ABC, abstractmethod
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, NewType, Union
+
+import matplotlib
+import numpy as np
+import pandas as pd
+from Levenshtein import distance as lev_score
+from matplotlib import pyplot as plt
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import entropy, gaussian_kde
+from sdmetrics.reports.single_table import QualityReport
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import r2_score as r2_sklearn
+
+from ..data.data_types import DataConfig
+from .pipelines.eval_detection import run_eval_detection
+
+UserStatistic = NewType("UserStatistic", Dict[int, Dict[str, Union[int, float]]])
+
+
+def _signed_log1p(x: np.ndarray) -> np.ndarray:
+    """Same as batch_tfs.Logarithm: sign(x) * log1p(|x|)."""
+    return np.sign(x) * np.log1p(np.abs(x))
+
+
+@dataclass
+class BaseMetric(ABC):
+    devices: list[str]
+    data_conf: DataConfig
+    log_dir: str
+
+    @abstractmethod
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame): ...
+
+    @abstractmethod
+    def __repr__(self): ...
+
+
+class BatchCutMetric(BaseMetric):
+    def __call__(self, orig, gen):
+        return orig[self.data_conf.index_name].shape[0]
+
+    def __repr__(self):
+        return "BatchCutMetric"
+
+
+@dataclass
+class Reconstruction(BaseMetric):
+    def __call__(self, orig, gen):
+        assert (orig.columns == gen.columns).all()
+        results = {}
+
+        cat_cards = self.data_conf.cat_cardinalities or {}
+        for col in self.data_conf.focus_on:
+
+            df = pd.concat(
+                (orig[col], gen[col]),
+                keys=["gt", "pred"],
+                axis=1,
+            ).map(lambda x: x[-self.data_conf.generation_len :])
+
+            results[col] = df.apply(
+                self._compute_accuracy if col in cat_cards else self._compute_mse,
+                axis=1,
+            ).mean()
+        return {
+            "overall": np.mean(list(results.values())),
+            **results,
+        }
+
+    def _compute_mse(self, row):
+        gt, pred = row["gt"], row["pred"]
+        return r2_sklearn(gt, pred)
+
+    def _compute_accuracy(self, row):
+        gt, pred = row["gt"], row["pred"]
+        return accuracy_score(gt, pred)
+
+    def __repr__(self):
+        return "Reconstruction"
+
+
+def get_perfect_score(score, max_shift, gen_len):
+    cost = np.transpose(score.mean(-1), (2, 0, 1))  # [B, L, L]
+    if max_shift >= 0:
+        i_indices = np.arange(gen_len)[:, None]  # L, 1
+        j_indices = np.arange(gen_len)
+        distance_from_diagonal = np.abs(i_indices - j_indices)  # L, L
+        mask_outside_band = distance_from_diagonal > max_shift
+        cost[:, mask_outside_band] = -1e12
+
+    L, B, D = score.shape[1:]
+    perfect_score = np.zeros_like(score, shape=(B, D))
+    for b in range(B):
+        workers, tasks = linear_sum_assignment(cost[b], maximize=True)
+        perfect_score[b] = score[workers, tasks, b].sum(0)  # D
+    return perfect_score.mean(0), perfect_score.mean(1).std(0)
+
+
+def r2_score(true_num, pred_num, baseline=None):
+    """R2 score for numerical
+    Input:
+        true_num: [L, B, D]
+        pred_num: [L, B, D]
+    """
+    gen_len = true_num.shape[0]
+    if baseline is None:
+        baseline = true_num.mean(0)
+    denominator = ((true_num - baseline) ** 2).sum(axis=0, dtype=np.float64)  # B, D
+    denominator = denominator.mean(0)[None].repeat(true_num.shape[1], axis=0)
+
+    nominator = (pred_num[:, None] - true_num[None, :]) ** 2  # [L, L, B, D]
+    denominator[nominator.sum(0).sum(0) == 0] = 1
+    nominator[:, :, (denominator == 0)] = 1 / gen_len
+    denominator[denominator == 0] = 1
+
+    return 1 / gen_len - (nominator / denominator)  # [L, L, B, D]
+
+
+def r1_score(true_num, pred_num, baseline=None):
+    """R1 score for numerical(MAE analog for R2)
+    Input:
+        true_num: [L, B, D]
+        pred_num: [L, B, D]
+    """
+    gen_len = true_num.shape[0]
+    if baseline is None:
+        baseline = np.median(true_num, 0)
+    denominator = np.abs(true_num - baseline).sum(axis=0, dtype=np.float64)  # B, D
+    denominator = denominator.mean(0)[None].repeat(true_num.shape[1], axis=0)
+
+    nominator = np.abs(pred_num[:, None] - true_num[None, :])  # [L, L, B, D]
+    denominator[nominator.sum(0).sum(0) == 0] = 1
+    nominator[:, :, (denominator == 0)] = 1 / gen_len
+    denominator[denominator == 0] = 1
+
+    return 1 / gen_len - (nominator / denominator)  # [L, L, B, D]
+
+
+def smape_score(true_num, pred_num):
+    """1 - sMAPE score
+    Input:
+        true_num: [L, B, D]
+        pred_num: [L, B, D]
+    """
+    gen_len = true_num.shape[0]
+    nominator = np.abs(pred_num[:, None] - true_num[None, :])  # [L, L, B, D]
+    denominator = np.abs(pred_num[:, None]) + np.abs(true_num[None, :])  # [L, L, B, D]
+    denominator[nominator == 0] = 1
+    smape = nominator / denominator / gen_len  # L, L, B, D
+
+    return 1 / gen_len - smape  # [L, L, B, D]
+
+
+def f1_macro(true_cat, pred_cat):
+    L, B, D = true_cat.shape
+    result = np.zeros((L, L, B, D))
+
+    for d in range(D):
+        y_true = true_cat[:, :, d]  # (L, B)
+        y_pred = pred_cat[:, :, d]  # (L, B)
+
+        # 1. Create match matrix
+        match = y_pred[:, None, :] == y_true[None, :, :]  # (L, L, B)
+
+        # 2. Compute class counts PER BATCH
+        max_class = max(np.max(y_true), np.max(y_pred)) + 1
+        n_true = np.zeros((max_class, B))
+        n_pred = np.zeros((max_class, B))
+
+        for b in range(B):
+            n_true[:, b] = np.bincount(y_true[:, b], minlength=max_class)
+            n_pred[:, b] = np.bincount(y_pred[:, b], minlength=max_class)
+
+        denom = n_true + n_pred  # (max_class, B)
+        denom[denom == 0] = 1  # Avoid div/0 (safe since TP=0 when denom=0)
+
+        # For each (i,j,b), we need denom[y_pred[i,b], b]
+        batch_indices = np.arange(B)[None, None, :]  # (1, 1, B)
+        class_indices = y_pred[:, None, :]  # (L, 1, B)
+
+        # Broadcast to (L, L, B) and index denom
+        denom_vals = denom[class_indices, batch_indices]  # (L, L, B)
+
+        # 4. Compute F1 contribution ONLY where match=True
+        f1_contrib = np.where(match, 2 / denom_vals, 0)  # (L, L, B)
+
+        # 5. Normalize by number of unique classes PER BATCH
+        unique_counts = np.array(
+            [
+                len(np.unique(np.concatenate([y_true[:, b], y_pred[:, b]])))
+                for b in range(B)
+            ]
+        )
+        result[:, :, :, d] = f1_contrib / unique_counts[None, None, :]
+
+    return result
+
+
+def f1_micro(true_cat, pred_cat):
+    gen_len = true_cat.shape[0]  # [gen_len, B, D]
+    accuracy = (pred_cat[:, None] == true_cat[None, :]) / gen_len  # [L, L, B, D]
+    return accuracy
+
+
+def get_mode_baseline(orig, time_name, focus_num, gen_len, max_seq_len):
+    baseline = []
+    if not focus_num:
+        return
+    for name in focus_num:
+        if name == time_name:
+            hist_delta = orig[name].map(lambda x: np.diff(x[-max_seq_len:-gen_len], 1))
+            median_delta = hist_delta.map(np.median).values  # B
+            arr = np.repeat(median_delta[None], gen_len, 0)
+            last_time = orig[name].map(lambda x: x[-gen_len - 1]).values
+            baseline += [np.cumsum(arr, 0) + last_time]
+        else:
+            median = (
+                orig[name].map(lambda x: np.median(x[-max_seq_len:-gen_len])).values
+            )
+            baseline += [np.repeat(median[None], gen_len, 0)]
+    return np.stack(baseline, -1)  # gen_len, B, D
+
+
+@dataclass
+class OTD(BaseMetric):
+    max_shift: int = -1
+    num_metric: str = "r1"
+    f1_average: str = "macro"
+    focus_on: list[str] = None
+    detailed: bool = False
+    report_std: bool = False
+    log_cols: list[str] = None
+    # global_denom: bool = True
+
+    def __post_init__(self):
+        if self.focus_on:
+            focus_on = [
+                f if f != "<target_token>" else self.data_conf.target_token
+                for f in self.focus_on
+            ]
+            object.__setattr__(self, "focus_on", focus_on)
+
+    def __call__(self, orig, gen):
+        assert (orig.columns == gen.columns).all()
+        results = {}
+        orig, gen = deepcopy(orig), deepcopy(gen)
+
+        # Cut gen_len
+        gen_len = self.data_conf.generation_len
+        seq_cols = self.data_conf.focus_on
+        focus_num, focus_cat = self.data_conf.focus_num, self.data_conf.focus_cat
+        if self.focus_on:
+            seq_cols = [n for n in seq_cols if n in self.focus_on]
+            focus_num = [n for n in focus_num if n in self.focus_on]
+            focus_cat = [n for n in focus_cat if n in self.focus_on]
+            if seq_cols == []:
+                return 0
+
+        mode_baseline = get_mode_baseline(
+            orig,
+            self.data_conf.time_name,
+            focus_num,
+            gen_len,
+            self.data_conf.max_seq_len,
+        )
+        orig[seq_cols] = orig[seq_cols].map(lambda x: x[-gen_len:])
+        gen[seq_cols] = gen[seq_cols].map(lambda x: x[-gen_len:])
+
+        # Prepare num arrays
+        num_metric = np.empty((gen_len, gen_len, orig.shape[0], 0))
+        if focus_num:
+            true_num = orig[focus_num].values  # B, D
+            pred_num = gen[focus_num].values  # B, D
+
+            B, D = true_num.shape
+            true_num = np.transpose(
+                np.concatenate(true_num.ravel()).reshape((B, D, gen_len)),
+                (2, 0, 1),
+            )  # [gen_len, B, D]
+            pred_num = np.transpose(
+                np.concatenate(pred_num.ravel()).reshape((B, D, gen_len)),
+                (2, 0, 1),
+            )  # [gen_len, B, D]
+
+            if self.log_cols:
+                for col in self.log_cols:
+                    if col in focus_num:
+                        d = focus_num.index(col)
+                        mode_baseline[..., d] = _signed_log1p(mode_baseline[..., d])
+                        true_num[..., d] = _signed_log1p(true_num[..., d])
+                        pred_num[..., d] = _signed_log1p(pred_num[..., d])
+
+            if self.num_metric == "r2":
+                num_metric = r2_score(true_num, pred_num, mode_baseline)
+            elif self.num_metric == "r1":
+                num_metric = r1_score(true_num, pred_num, mode_baseline)
+            elif self.num_metric == "smape":
+                num_metric = smape_score(true_num, pred_num)
+            else:
+                raise ValueError(f"Unknown metric: {self.num_metric}")
+
+        # Prepare cat arrays
+        cat_metric = np.empty((gen_len, gen_len, orig.shape[0], 0))
+        if focus_cat:
+            true_cat = orig[focus_cat].values  # B, D
+            pred_cat = gen[focus_cat].values  # B, D
+
+            B, D = true_cat.shape
+            true_cat = np.transpose(
+                np.concatenate(true_cat.ravel()).reshape((B, D, gen_len)),
+                (2, 0, 1),
+            )  # [gen_len, B, D]
+            pred_cat = np.transpose(
+                np.concatenate(pred_cat.ravel()).reshape((B, D, gen_len)),
+                (2, 0, 1),
+            )  # [gen_len, B, D]
+            if self.f1_average == "micro":
+                cat_metric = f1_micro(true_cat, pred_cat)
+            elif self.f1_average == "macro":
+                cat_metric = f1_macro(true_cat, pred_cat)
+            else:
+                raise ValueError(f"Unknown f1 average: {self.f1_average}")
+
+        full_score = np.concatenate([num_metric, cat_metric], axis=-1)  # [L, L, B, D]
+        perfect_score, std_result = get_perfect_score(
+            full_score, self.max_shift, gen_len
+        )
+        results = dict(zip(focus_num + focus_cat, perfect_score))
+        mean_result = np.mean(list(results.values()))
+        if not self.detailed:
+            if not self.report_std:
+                return mean_result
+            else:
+                return {"mean": mean_result, "std": std_result}
+        return {
+            "overall": mean_result,
+            **results,
+        }
+
+    def __repr__(self):
+        if self.focus_on is None:
+            res = "GenOTD"
+        else:
+            res = "Matched"
+        if self.max_shift == 0:
+            res = "Paired"
+        elif self.max_shift > 0:
+            res += f" {self.max_shift}"
+        if len(self.focus_on or []) == 1:
+            if self.focus_on[0] in (self.data_conf.num_names or []):
+                res += " R1"
+            elif self.focus_on[0] in (self.data_conf.cat_cardinalities or []):
+                res += " F1"
+            res += f" {self.focus_on[0]}"
+        if self.num_metric != "r1":
+            res += f" {self.num_metric}"
+        if self.log_cols:
+            res += f" log1p[{','.join(self.log_cols)}]"
+        if self.f1_average != "macro":
+            res += f" {self.f1_average}"
+        # if not self.global_denom:
+        #     res = "---" + res + " userwise_denom"
+        return res
+
+
+class KLDiv(BaseMetric):
+
+    EPS = 1e-8  # сглаживание, чтобы не было нулевых вероятностей
+    N_BINS = 50
+
+    def __call__(self, orig, gen):
+        assert (orig.columns == gen.columns).all()
+
+        cat_cards = self.data_conf.cat_cardinalities or {}
+        results = {}
+
+        for col in self.data_conf.focus_on:
+            df = pd.concat(
+                (orig[col], gen[col]),
+                keys=["gt", "pred"],
+                axis=1,
+            ).map(lambda x: x[-self.data_conf.generation_len :])
+
+            results[col] = df.apply(
+                lambda row: self._compute_kl(row, bins=cat_cards.get(col, None)),
+                axis=1,
+            ).mean()
+
+        return {"overall": np.mean(list(results.values())), **results}
+
+    def _compute_kl(self, row, bins=None):
+        if bins is None:
+            bins = self.N_BINS
+
+        gt, pred = row["gt"], row["pred"]
+
+        # общий диапазон
+        range_ = (
+            (min(gt.min(), pred.min()), max(gt.max(), pred.max()))
+            if bins is not None
+            else (0, bins)
+        )
+
+        p, _ = np.histogram(gt, bins=self.N_BINS, range=range_, density=False)
+        q, _ = np.histogram(pred, bins=self.N_BINS, range=range_, density=False)
+
+        p = p.astype(float) + self.EPS
+        q = q.astype(float) + self.EPS
+        p /= p.sum()
+        q /= q.sum()
+        return entropy(p, q)
+
+    def __repr__(self):
+        return "KLDiv"
+
+
+class JSDiv(BaseMetric):
+
+    EPS = 1e-8
+    N_BINS = 50
+
+    def __call__(self, orig, gen):
+        assert (orig.columns == gen.columns).all()
+
+        cat_cards = self.data_conf.cat_cardinalities or {}
+        results = {}
+
+        for col in self.data_conf.focus_on:
+            df = pd.concat(
+                (orig[col], gen[col]),
+                keys=["gt", "pred"],
+                axis=1,
+            ).map(lambda x: x[-self.data_conf.generation_len :])
+
+            results[col] = df.apply(
+                lambda row: self._compute_kl(row, bins=cat_cards.get(col, None)),
+                axis=1,
+            ).mean()
+
+        return {"overall": np.mean(list(results.values())), **results}
+
+    def _compute_kl(self, row, bins=None):
+        if bins is None:
+            bins = self.N_BINS
+
+        gt, pred = row["gt"], row["pred"]
+
+        range_ = (
+            (min(gt.min(), pred.min()), max(gt.max(), pred.max()))
+            if bins is not None
+            else (0, bins)
+        )
+
+        p, _ = np.histogram(gt, bins=self.N_BINS, range=range_, density=False)
+        q, _ = np.histogram(pred, bins=self.N_BINS, range=range_, density=False)
+
+        p = p.astype(float) + self.EPS
+        q = q.astype(float) + self.EPS
+        p /= p.sum()
+        q /= q.sum()
+
+        m = 0.5 * (p + q)
+
+        return 0.5 * entropy(p, m) + 0.5 * entropy(q, m)
+
+    def __repr__(self):
+        return "JSDiv"
+
+
+@dataclass
+class BinaryMetric(BaseMetric):
+
+    @abstractmethod
+    def get_scores(self, row): ...
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        df = pd.concat(
+            (orig[self.data_conf.target_token], gen[self.data_conf.target_token]),
+            keys=["gt", "pred"],
+            axis=1,
+        ).map(lambda x: x[-self.data_conf.generation_len :])
+        return df.apply(self.get_scores, axis=1).mean()
+
+
+@dataclass
+class NDCG(BinaryMetric):
+    k: str = 1
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        set_gt = set(gt)
+        pred_len = min(self.k, len(pred))
+        ground_truth_len = min(self.k, len(gt))
+        denom = [1 / np.log2(i + 2) for i in range(self.k)]
+        dcg = sum(denom[i] for i in range(pred_len) if pred[i] in set_gt)
+        idcg = sum(denom[:ground_truth_len])
+        return dcg / idcg
+
+    def __repr__(self):
+        return f"NDCG@{self.k} on {self.data_conf.target_token}"
+
+
+@dataclass
+class Levenshtein(BinaryMetric):
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        lev_m = 1 - lev_score(gt, pred) / max(len(pred), len(gt))
+        return lev_m
+
+    def __repr__(self):
+        return f"Levenstein on {self.data_conf.target_token}"
+
+
+@dataclass
+class Accuracy(BinaryMetric):
+    first_k: int = 0
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        if self.first_k < 1:
+            acc_m = accuracy_score(gt, pred)
+        else:
+            acc_m = accuracy_score(gt[: self.first_k], pred[: self.first_k])
+        return acc_m
+
+    def __repr__(self):
+        return f"Accuracy {f'first@{self.first_k}' if self.first_k > 0 else ''} on {self.data_conf.target_token}"
+
+
+@dataclass
+class PR(BinaryMetric):
+    @staticmethod
+    def get_statistics(gt: np.ndarray, pred: np.ndarray) -> UserStatistic:
+        assert isinstance(gt, np.ndarray) and isinstance(pred, np.ndarray)
+        if len(gt) == 0 and len(pred) == 0:
+            return {}
+
+        cls_metric = dict()
+        gt_counter = collections.Counter(gt)
+        pred_counter = collections.Counter(pred)
+
+        all_classes = set(np.concatenate([gt, pred]))
+        for cls in all_classes:
+            gt_cls = gt_counter.get(cls, 0)
+            pred_cls = pred_counter.get(cls, 0)
+
+            tp = min(gt_cls, pred_cls)
+            fn = max(0, gt_cls - pred_cls)
+            fp = max(0, pred_cls - gt_cls)
+
+            precision = tp / (tp + fp) if (tp + fp) != 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) != 0 else 0
+
+            cls_metric[cls] = {
+                "Precision": precision,
+                "Recall": recall,
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+            }
+
+        return cls_metric
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        stats = self.get_statistics(gt, pred)
+        return pd.Series(stats)
+
+    def __repr__(self):
+        return f"PR on {self.data_conf.target_token}"
+
+
+@dataclass
+class Precision(PR):
+    average: str = "macro"
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        stats = self.get_statistics(gt, pred)
+        perfs = stats.values()
+        if self.average == "macro":
+            ret = sum(m["Precision"] for m in perfs) / len(perfs)
+        else:
+            total_tp = sum(m["tp"] for m in perfs)
+            total_fp = sum(m["fp"] for m in perfs)
+            ret = total_tp / (total_tp + total_fp) if (total_tp + total_fp) else 0
+
+        return ret
+
+    def __repr__(self):
+        return f"Precision {self.average} on {self.data_conf.target_token}"
+
+
+@dataclass
+class Recall(PR):
+    average: str = "macro"
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        stats = self.get_statistics(gt, pred)
+        perfs = stats.values()
+        if self.average == "macro":
+            ret = sum(m["Recall"] for m in perfs) / len(perfs)
+        else:
+            total_tp = sum(m["tp"] for m in perfs)
+            total_fn = sum(m["fn"] for m in perfs)
+            ret = total_tp / (total_tp + total_fn) if (total_tp + total_fn) else 0
+        return ret
+
+    def __repr__(self):
+        return f"Recall {self.average} on {self.data_conf.target_token}"
+
+
+@dataclass
+class F1Metric(BinaryMetric):
+    average: str = "macro"
+
+    @staticmethod
+    def f1_score_macro_unorder(cls_metric: UserStatistic) -> float:
+        if not cls_metric:
+            return 1.0
+        f1_score_sum = 0
+        for _, value in cls_metric.items():
+            f1_score_sum += (
+                2
+                * value["precision"]
+                * value["recall"]
+                / (value["precision"] + value["recall"])
+                if (value["precision"] + value["recall"]) != 0
+                else 0
+            )
+        return f1_score_sum / len(cls_metric)
+
+    @staticmethod
+    def f1_score_micro_unorder(cls_metric: UserStatistic) -> float:
+        if not cls_metric:
+            return 1.0
+
+        tp, fp, fn = 0, 0, 0
+        for _, value in cls_metric.items():
+            tp += value["tp"]
+            fp += value["fp"]
+            fn += value["fn"]
+        return 2 * tp / (2 * tp + fp + fn)
+
+    @staticmethod
+    def get_statistics(gt: np.ndarray, pred: np.ndarray) -> UserStatistic:
+        assert isinstance(gt, np.ndarray) and isinstance(pred, np.ndarray)
+        if len(gt) == 0 and len(pred) == 0:
+            return {}
+
+        cls_metric = dict()
+        gt_counter = collections.Counter(gt)
+        pred_counter = collections.Counter(pred)
+
+        all_classes = set(np.concatenate([gt, pred]))
+        for cls in all_classes:
+            gt_cls = gt_counter.get(cls, 0)
+            pred_cls = pred_counter.get(cls, 0)
+
+            tp = min(gt_cls, pred_cls)
+            fn = max(0, gt_cls - pred_cls)
+            fp = max(0, pred_cls - gt_cls)
+
+            precision = tp / (tp + fp) if (tp + fp) != 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) != 0 else 0
+
+            cls_metric[cls] = {
+                "precision": precision,
+                "recall": recall,
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+            }
+
+        return cls_metric
+
+    def get_scores(self, row):
+        gt, pred = row["gt"], row["pred"]
+        f1_function = (
+            self.f1_score_macro_unorder
+            if self.average == "macro"
+            else self.f1_score_micro_unorder
+        )
+        f1 = f1_function(self.get_statistics(gt, pred))
+
+        return f1
+
+    def __repr__(self):
+        return f"F1_{self.average} on {self.data_conf.target_token}"
+
+
+@dataclass
+class DistributionMetric(BaseMetric):
+    overall: bool = False
+
+    @abstractmethod
+    def get_scores(self, row) -> pd.Series | float: ...
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        df = pd.concat(
+            (orig[self.data_conf.target_token], gen[self.data_conf.target_token]),
+            keys=["gt", "pred"],
+            axis=1,
+        ).map(lambda x: x[-self.data_conf.generation_len :])
+        if self.overall:
+            df = df.agg(lambda x: [np.concatenate(x.values)], axis=0)
+        max_c = df.map(max).max().max()
+        assert isinstance(max_c, np.int64)
+
+        def get_frequency(arr, max_c):
+            frequency_array = np.zeros(max_c + 1, dtype=float)
+            unique_values, counts = np.unique(arr, return_counts=True)
+            frequency_array[unique_values] = counts
+            return frequency_array / arr.size
+
+        df = df.map(lambda x: get_frequency(x, max_c))
+        df = df.apply(self.get_scores, axis=1).mean()
+        if isinstance(df, pd.Series):
+            return df.to_dict()
+        elif isinstance(df, float):
+            return df
+
+
+@dataclass
+class StatisticMetric(DistributionMetric):
+    def get_scores(self, row) -> pd.Series:
+        orig_score, gen_score = row.map(self.get_statistic)
+        # relative = (gen_score - orig_score) / (abs(orig_score) + 1e-8)
+        # score = 1 - (1 + abs(gen_score - orig_score))
+        return pd.Series({"gen": gen_score, "orig": orig_score})
+
+    @abstractmethod
+    def get_statistic(self, p) -> float: ...
+
+
+@dataclass
+class Gini(StatisticMetric):
+
+    def get_statistic(self, p):
+        p_sorted = np.sort(p)
+        n = len(p_sorted)
+
+        gini = 0
+        for k in range(n):
+            gini += (2 * (k + 1) - n - 1) * p_sorted[k]
+        gini = gini / (n - 1) if n != 1 else 1.0
+
+        return gini
+
+    def __repr__(self):
+        return self.overall * "Overall " + f"Gini on {self.data_conf.target_token}"
+
+
+@dataclass
+class ShannonEntropy(StatisticMetric):
+
+    def get_statistic(self, p):
+        p = p[p > 0]
+        shannon_entropy = -np.sum(p * np.log2(p))
+
+        return shannon_entropy
+
+    def __repr__(self):
+        return (
+            self.overall * "Overall "
+            + f"Shannon entropy on {self.data_conf.target_token}"
+        )
+
+
+@dataclass
+class GenVsHistoryMetric(BaseMetric):
+    overall: bool = False
+    calculate_orig: bool = False
+
+    @abstractmethod
+    def get_scores(row): ...
+
+    def score_for_df(self, df):
+        gen_len = self.data_conf.generation_len
+        hist = df[self.data_conf.target_token].map(lambda x: x[:-gen_len])
+        preds = df[self.data_conf.target_token].map(lambda x: x[-gen_len:])
+        df = pd.concat((hist, preds), keys=["hists", "preds"], axis=1)
+        if self.overall:
+            df = df.agg(lambda x: [np.concatenate(x.values)], axis=0)
+        return df.apply(self.get_scores, axis=1).mean()
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        gen_score = self.score_for_df(gen)
+        res = {"gen": gen_score}
+        if self.calculate_orig:
+            res["orig"] = self.score_for_df(orig)
+        # score = 1 - (1 + abs(gen_score - orig_score))
+        return res  # "score": score,
+
+
+@dataclass
+class DiversityIndex(BaseMetric):
+    def _simpson_cat(self, values):
+        simpson = []
+        for b in range(len(values)):
+            _, counts = np.unique(values[b], return_counts=True)
+            p = counts / len(values[b])
+            simpson += [1 - np.sum(p**2)]
+        return np.mean(simpson)
+
+    def _simpson_num(self, values):
+        simpson = []
+        flattened = np.concatenate(values.values)
+        x_min, x_max = flattened.min(), flattened.max()
+        x = np.linspace(x_min, x_max, 512)
+        for b in range(len(values)):
+            kde = gaussian_kde(values[b])
+            p = kde(x)
+            integral = np.trapz(p**2, x)
+            simpson += [integral]
+        return np.mean(simpson)
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        data = {}
+        data["orig"] = orig[self.data_conf.focus_on].map(
+            lambda x: x[-self.data_conf.generation_len :]
+        )
+        data["gen"] = gen[self.data_conf.focus_on].map(
+            lambda x: x[-self.data_conf.generation_len :]
+        )
+        collect = {"orig": [], "gen": []}
+        res = {}
+        for sample in collect:
+            for feature in self.data_conf.focus_cat:
+                res[f"{sample}_{feature}"] = self._simpson_cat(data[sample][feature])
+                collect[sample] += [res[f"{sample}_{feature}"]]
+            # for feature in self.data_conf.focus_num:
+            #     if self.data_conf.time_name != feature:
+            #         continue
+            #     res[f"{sample}_{feature}"] = self._simpson_num(data[sample][feature])
+            #     collect[sample] += [res[f"{sample}_{feature}"]]
+            res[sample] = np.mean(collect[sample])
+        return res
+
+    def __repr__(self):
+        return "DiversityIndex"
+
+
+@dataclass
+class CardinalityCoverage(GenVsHistoryMetric):
+    def get_scores(self, row):
+        hists, preds = row["hists"], row["preds"]
+        return len(np.unique(preds)) / len(np.unique(hists))
+
+    def __repr__(self):
+        return (
+            self.overall * "Overall "
+            + f"CardinalityCoverage on {self.data_conf.target_token}"
+        )
+
+
+@dataclass
+class Cardinality(GenVsHistoryMetric):
+    def get_scores(self, row):
+        hists, preds = row["hists"], row["preds"]
+        return len(np.unique(preds))
+
+    def __repr__(self):
+        return (
+            self.overall * "Overall " + f"Cardinality on {self.data_conf.target_token}"
+        )
+
+
+@dataclass
+class NoveltyScore(GenVsHistoryMetric):
+    def get_scores(self, row):
+        hists, preds = row["hists"], row["preds"]
+        hists, preds = set(hists), set(preds)
+        return len(preds - hists) / len(preds)
+
+    def __repr__(self):
+        return (
+            self.overall * "Overall " + f"NoveltyScore on {self.data_conf.target_token}"
+        )
+
+
+def visual_cat2col(orig: pd.DataFrame, data_conf):
+    """The 9 most frequent categories get a color each, everything else shares C7."""
+    cols = ["C0", "C1", "C2", "C3", "C4", "C5", "C6", "C8", "C9"]
+    top_cat = orig[data_conf.target_token].explode().value_counts().head(9).index
+    return collections.defaultdict(lambda: "C7", dict(zip(top_cat, cols)))
+
+
+def draw_sequence(ax, df, id, data_conf, cat2col, log_amnt=True, dark_style=False):
+    """Stem-plot one user's tail, ruled at the split; shared with visual_figures.py."""
+    gen_len = data_conf.generation_len
+    amnt = data_conf.amount_feature or (data_conf.num_names or [None])[0]
+    all_features = [data_conf.time_name, data_conf.target_token]
+    if amnt is not None:
+        all_features.insert(1, amnt)
+
+    def stem_y(subset):
+        if amnt is None:
+            return np.ones(len(subset), dtype=np.float32)
+        if not log_amnt:
+            return subset[amnt]
+        x = subset[amnt].astype(np.float32)
+        linear = (x <= np.e) & (x >= -np.e)
+        y = np.where(linear, 1, np.abs(x))
+        return np.where(linear, x / (np.e * np.log(10)), np.sign(x) * np.log10(y))
+
+    data = df.loc[[id], all_features].explode(all_features).iloc[-gen_len * 2 :]
+    data["col"] = data[data_conf.target_token].map(cat2col)
+    for col in data["col"].unique():
+        subset = data[data["col"] == col]
+        ax.stem(
+            subset[data_conf.time_name], stem_y(subset), markerfmt=col, linefmt=f"{col}-"
+        )
+    boundary = data[data_conf.time_name].iloc[-gen_len - 1]
+    ax.axvline(boundary, c="w" if dark_style else "black", lw=3)
+
+
+@dataclass
+class Visualization(BaseMetric):
+    users: list[int] = None
+    dark_style: bool = False
+    log_amnt: bool = True
+    image_format: str = "pdf"
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        data_conf = deepcopy(self.data_conf)
+        plt.style.use("dark_background" if self.dark_style else "default")
+        if self.dark_style:
+            matplotlib.rcParams.update(
+                {"figure.facecolor": "none", "axes.facecolor": "none"}
+            )
+
+        amnt = data_conf.amount_feature or (data_conf.num_names or [None])[0]
+        cat2col = visual_cat2col(orig, data_conf)
+
+        clients = self.users or np.random.default_rng(1).choice(gen.index, 5)
+
+        for id in clients:
+            fig, axs = plt.subplots(figsize=(10, 4), nrows=2, sharex=True, sharey=True)
+            for i, (df, title) in enumerate(
+                zip([orig, gen], ["Original", "Generated"])
+            ):
+                draw_sequence(
+                    axs[i], df, id, data_conf, cat2col, self.log_amnt, self.dark_style
+                )
+                axs[i].set_title(title)
+                if i == 1:
+                    axs[i].set_xlabel("Time")
+                axs[i].set_ylabel("Log amount" if amnt is not None else "Events")
+
+            fig.suptitle(
+                f"{data_conf.dataset_name.upper()}, user_id={id}",
+                x=0,
+                ha="left",
+                size="x-large",
+            )
+            fig.tight_layout()
+            save_dir = f"{self.log_dir}/visuals"
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            filename = f"{save_dir}/{id}.{self.image_format}"
+            if self.image_format == "png":
+                fig.savefig(filename, dpi=100, bbox_inches="tight", facecolor="auto")
+            else:
+                fig.savefig(filename, bbox_inches="tight")
+            plt.close(fig)
+        return 1.0
+
+    def __repr__(self):
+        return "Visualization"
+
+
+@dataclass
+class Density(BaseMetric):
+    log_cols: list[str] = None
+    with_timediff: bool = False
+    save_details: bool = False
+    verbose: bool = False
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        data_conf = deepcopy(self.data_conf)
+        num_names = data_conf.num_names or []
+        if self.with_timediff:
+            num_names += ["time_delta"]
+        cat_names = list(data_conf.cat_cardinalities or {})
+        seq_cols = num_names + cat_names
+
+        def log10_scale(x):
+            linear = (x <= np.e) & (x >= -np.e)  # to match the derivatives
+            y = np.where(linear, 1, x)  # to avoid np.log10 warnings
+            y = np.abs(y)
+            return np.where(linear, x / (np.e * np.log(10)), np.sign(x) * np.log10(y))
+
+        def preproc_parquet(df):
+            df = deepcopy(df)
+            time_name, gen_len = data_conf.time_name, data_conf.generation_len
+            assert df._seq_len.min() >= data_conf.generation_len
+
+            if self.with_timediff:
+                df["time_delta"] = df[time_name].map(lambda x: np.diff(x, prepend=0))
+
+            df = df[seq_cols].map(lambda x: x[-gen_len:])
+            df = df.explode(seq_cols)
+            df[cat_names] = df[cat_names].astype("int64")
+            df[num_names] = df[num_names].astype("float32")
+            return df
+
+        # Preprocess
+        gen = preproc_parquet(gen)
+        orig = preproc_parquet(orig)
+        # Prepare metadata
+        metadata = {"columns": {}}
+        for num_name in num_names:
+            metadata["columns"][num_name] = {"sdtype": "numerical"}
+        for cat_name in cat_names:
+            metadata["columns"][cat_name] = {"sdtype": "categorical"}
+
+        if self.log_cols:
+            for col in self.log_cols:
+                gen[col] = log10_scale(gen[col].values)
+                orig[col] = log10_scale(orig[col].values)
+
+        gen = gen[metadata["columns"].keys()]
+        orig = orig[metadata["columns"].keys()]
+        # Calculate
+        qual_report = QualityReport()
+        qual_report.generate(orig, gen, metadata, verbose=self.verbose)
+        quality = qual_report.get_properties()
+        Shape = quality["Score"][0]
+        Trend = quality["Score"][1]
+        res = dict(shape=Shape, trend=Trend)
+        if self.save_details:
+            save_dir = f"{self.log_dir}/density"
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            with open(f"{save_dir}/density.txt", "w") as f:
+                f.write(f"Shape: {Shape}\n")
+                f.write(f"Trend: {Trend}\n")
+            shapes = qual_report.get_details(property_name="Column Shapes")
+            trends = qual_report.get_details(property_name="Column Pair Trends")
+            shapes.to_csv(f"{save_dir}/shape.csv")
+            trends.to_csv(f"{save_dir}/trend.csv")
+        return res
+
+    def __repr__(self):
+        return "Density"
+
+
+@dataclass
+class Detection(BaseMetric):
+    """
+    Run a classifier to detect generated sequences.
+    """
+
+    condition_len: int = 0
+    report_std: bool = False
+    verbose: bool = False
+    method: str | None = None
+
+    def __call__(self, orig: pd.DataFrame, gen: pd.DataFrame):
+        data_conf = deepcopy(self.data_conf)
+        tail_len = data_conf.generation_len + self.condition_len
+        discr_res = run_eval_detection(
+            orig=orig,
+            gen=gen,
+            log_dir=self.log_dir,
+            data_conf=data_conf,
+            dataset=f"detection/{self.data_conf.dataset_name}",
+            method=self.method or "gru",
+            tail_len=tail_len,
+            devices=self.devices,
+            verbose=self.verbose,
+        )
+        acc = discr_res.loc["MulticlassAUROC"].loc["mean"]
+        err = (1 - acc) * 2
+        std = discr_res.loc["MulticlassAUROC"].loc["std"]
+        if self.report_std:
+            return {"mean": float(err), "std": 2 * float(std)}
+        return float(err)
+
+    def __repr__(self):
+        suffix = f" {self.method}" if self.method else ""
+        return f"Detection{suffix} score ({self.condition_len} hist)"

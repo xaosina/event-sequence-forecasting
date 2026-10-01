@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/amazon/amazon,
+  horizon/16,
+  methods/ae/seqvae,
+]

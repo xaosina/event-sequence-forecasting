@@ -1,0 +1,7 @@
+config_factory: [
+  start,
+  datasets/amazon/amazon,
+  metrics/with_detection/amazon,
+  horizon/4,
+  methods/multitoken,
+]

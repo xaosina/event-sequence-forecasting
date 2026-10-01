@@ -1,0 +1,78 @@
+# MODEL
+# Hardcoded 1 layer
+# Always "_presence": 4
+# Increase max wd
+# Increase max k_factor
+# Since we have bad correlation with loss and metric (loss increases with k_factor):
+#     Replace target metric to GenOTD
+
+
+trainer:
+  metrics_on_train: False
+  grad_clip: 1
+
+data_conf:
+  batch_size: 32
+  train_random_end: none
+  train_transforms:
+    "time_diff":
+      TimeToDiff:
+        disable: True
+
+optimizer:
+  name: AdamW
+  params:
+    lr: 1.e-4
+
+loss:
+  name: DeTPPLoss
+  params: 
+    loss_subset: 0.05
+    matching_weights: {"_presence": 4}
+
+model:
+  name: DeTPP
+  autoencoder:
+    name: BaselineAE
+    params:
+      cat_emb_dim: 8
+      num_emb_dim: 8
+      num_norm: True
+      use_time: True
+    pretrain: False
+    frozen: False
+    checkpoint:
+    batch_transforms:
+  latent_encoder:
+    name: GRU
+    params:
+      hidden_size: 512
+      num_layers: 1
+  params:
+    k_factor: 3
+    k_gen: ${data_conf.generation_len}
+
+optuna:
+  params:
+    n_trials: 100
+    n_startup_trials: 10
+    request_list:
+    - "optimizer.params.weight_decay": 2.005817028224756e-07
+      "optimizer.params.lr": 0.0008546773813094806
+      "model.latent_encoder.params.hidden_size": 452
+      "model.params.k_factor": 1.4356463521292926
+      "model.autoencoder.params.num_norm": true
+      "model.autoencoder.params.cat_emb_dim": 33
+      "model.autoencoder.params.num_emb_dim": 1
+    target_metric: "GenOTD"
+  suggestions:
+    - ["optimizer.params.weight_decay", ["suggest_float", {low: 1.e-8, high: 1.e-1, log: True}]]
+    - ["optimizer.params.lr", ["suggest_float", {low: 1.e-5, high: 0.1, log: True}]]
+
+    - ["model.latent_encoder.params.hidden_size", ["suggest_int", {low: 10, high: 1200, log: True}]]
+    - ["model.params.k_factor", ["suggest_float", {low: 1, high: 10, log: False}]]
+
+
+    - ["model.autoencoder.params.num_norm", ["suggest_categorical", {choices: [True, False]}]]
+    - ["model.autoencoder.params.cat_emb_dim", ["suggest_int", {low: 1, high: 128, log: False}]]
+    - ["model.autoencoder.params.num_emb_dim", ["suggest_int", {low: 1, high: 128, log: False}]]

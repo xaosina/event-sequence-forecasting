@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/alphabattle/alphabattle,
+  horizon/4,
+  methods/ae/seqvae,
+]

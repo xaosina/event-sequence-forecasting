@@ -1,0 +1,77 @@
+import logging
+import sys
+import tempfile
+from dataclasses import asdict
+
+import pyrallis
+from ebes.pipeline import Runner
+from omegaconf import OmegaConf
+
+from generation.runners import PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+
+def pop_arg(args, key):
+    i = 0
+    new_args = []
+    value = None
+    while i < len(args):
+        if args[i] == key:
+            value = args[i + 1]
+            if key in ["--config_factory", "--overwrite_factory"]:
+                assert value[0] == "[" and value[-1] == "]", "Wrong factory format"
+                value = value[1:-1].split(",")
+            i += 2
+        else:
+            new_args += [args[i]]
+            i += 1
+    return new_args, value
+
+
+def run_config_factory(config_path, config_factory, overwrite_factory, config_dir):
+    if config_factory is not None:
+        config_paths = [f"{config_dir}/{name}.yaml" for name in config_factory]
+    else:
+        config_paths = []
+    config_paths += [config_path or "config.yaml"]
+    if overwrite_factory is not None:
+        config_paths += [f"{config_dir}/{name}.yaml" for name in overwrite_factory]
+    configs = [OmegaConf.load(path) for path in config_paths]
+    merged_config = OmegaConf.merge(*configs)
+    merged_config["config_factory"] = None
+    return merged_config
+
+
+def main():
+    args = sys.argv[1:]
+
+    # 0. Base configs folder
+    args, config_dir = pop_arg(args, "--conf_dir")
+    config_dir = config_dir or "configs_paper"
+    # 1. config generation
+    args, config_factory = pop_arg(args, "--config_factory")
+    # 2. overwrite with certain fields
+    args, config_path = pop_arg(args, "--config_path")
+    # 3. in case we need to overwrite all above
+    args, overwrite_factory = pop_arg(args, "--overwrite_factory")
+    path = config_path or "config.yaml"
+
+    config_factory = config_factory or OmegaConf.load(path).get("config_factory")
+    merged_config = run_config_factory(
+        config_path, config_factory, overwrite_factory, config_dir
+    )
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as tmpfile:
+        OmegaConf.save(config=merged_config, f=tmpfile.name)
+        temp_config_path = tmpfile.name
+        print(f"Saved temporary config: {temp_config_path}")
+        cfg = pyrallis.parse(PipelineConfig, temp_config_path, args)
+        config = OmegaConf.create(asdict(cfg))
+        runner = Runner.get_runner(config["runner"]["name"])
+        res = runner.run(config)
+        print(res.round(5))
+
+
+if __name__ == "__main__":
+    main()

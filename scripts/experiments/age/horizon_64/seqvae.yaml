@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/age/age,
+  horizon/64,
+  methods/ae/seqvae,
+]

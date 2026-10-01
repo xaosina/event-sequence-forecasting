@@ -1,0 +1,57 @@
+log/*
+data/**
+data/**/*.csv
+data/**/*.csv.gz
+data/**/*.crc
+data/**/*.pt
+data/**/*.npy
+data/**/*.parquet
+data/**/*_SUCCESS
+dev/**
+ebes/*
+tests/log**
+scripts/sync.sh
+zhores/
+zhores/configs_old/
+zhores/*.sh
+**.parquet
+*.ipynb_checkpoints*
+
+*.ckpt
+
+notebooks/analysis_param.ipynb
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+**.ipynb_checkpoints**
+.vscode
+
+build/*
+
+transaction_me*/*
+generation/data/preprocess/data/
+*temp.ipynb
+
+# Mine
+temp/
+*gpickle
+.hypothesis*
+*.out
+res
+
+notebooks/my_anal/
+notebooks/planning/
+
+bpe_post_process.py
+*/exps/configs/*
+# notebooks/
+*pkl
+*.png
+*.csv
+# *.sh
+embeddings/
+*.code-workspace
+**/age_fix**
+scripts/compare_age_csv_vs_age_fix.py
+scripts/parse_train_times_tree.py

@@ -1,0 +1,13 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  metrics/with_detection/retweet,
+  horizon/32,
+  methods/ldm/defaults,
+  methods/ldm/encoder,
+  methods/ldm/ae/vae,
+]
+
+model:
+  autoencoder:
+    checkpoint: /home/transaction-generation/log/gen-paper/retweet/ae/vae/lr/3.e-3/seed_0/ckpt/epoch__0101_-_loss__-0.008163.ckpt

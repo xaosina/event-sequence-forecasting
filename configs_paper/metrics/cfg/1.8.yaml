@@ -1,0 +1,6 @@
+model:
+  params:
+    cfg_w: 1.8
+  latent_encoder:
+    params:
+      cfg_w: 1.8

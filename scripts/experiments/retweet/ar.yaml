@@ -1,0 +1,6 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  metrics/with_detection/retweet,
+  methods/ar/gpt
+]

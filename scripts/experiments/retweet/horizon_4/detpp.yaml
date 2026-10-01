@@ -1,0 +1,7 @@
+config_factory: [
+  start,
+  datasets/retweet/retweet,
+  metrics/with_detection/retweet,
+  horizon/4,
+  methods/detpp,
+]

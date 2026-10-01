@@ -1,0 +1,9 @@
+config_factory: [
+  start,
+  datasets/amazon/amazon,
+  metrics/with_detection/amazon,
+  horizon/64,
+  methods/cdiff/defaults,
+  methods/cdiff/cdiff,
+  methods/cdiff/amazon/features,
+]

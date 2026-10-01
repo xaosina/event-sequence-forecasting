@@ -1,0 +1,10 @@
+config_factory: [
+  start,
+  datasets/alphabattle/alphabattle,
+  metrics/with_detection/alphabattle,
+  horizon/64,
+  methods/ldm/defaults,
+  methods/ldm/encoder,
+  methods/ldm/ae/seqvae,
+  methods/ldm/specs/alphabattle,
+]

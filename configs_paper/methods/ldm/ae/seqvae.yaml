@@ -1,0 +1,18 @@
+# default vae autoencoder
+model:
+  autoencoder:
+    name: SeqVAE
+    params:
+      use_time: True
+      num_layers: 3
+      d_token: 8
+      n_head: 1
+      factor: 32
+      linear_num: True
+    pretrain: False
+    frozen: True
+    checkpoint: 
+
+data_conf:
+  train_transforms:
+    'time_diff':

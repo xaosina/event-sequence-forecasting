@@ -1,0 +1,9 @@
+config_factory: [
+  start,
+  datasets/amazon/amazon,
+  metrics/with_detection/amazon,
+  horizon/32,
+  methods/ldm/defaults,
+  methods/ldm/encoder,
+  methods/ldm/ae/seqvae,
+]

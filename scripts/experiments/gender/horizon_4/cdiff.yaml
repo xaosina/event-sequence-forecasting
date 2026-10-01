@@ -1,0 +1,9 @@
+config_factory: [
+  start,
+  datasets/gender/gender,
+  metrics/with_detection/gender,
+  horizon/4,
+  methods/cdiff/defaults,
+  methods/cdiff/cdiff,
+  methods/cdiff/gender/features,
+]
