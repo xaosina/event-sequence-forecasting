@@ -2,13 +2,23 @@
 
 Official code for the NeurIPS 2026 paper (Evaluations & Datasets Track).
 
-![Trade-off between TMS and cDFS at horizon 32](assets/tradeoff_h32.png)
+<table>
+  <tr>
+    <td align="center">
+      <img src="assets/tradeoff_h32.png" alt="Trade-off between TMS and cDFS at horizon 32" width="100%">
+      <br>
+      <sub><b>Accuracy (TMS) vs. realism (cDFS)</b> on three datasets at horizon 32. The solid line is the Pareto front over baselines: no method is strong on both axes, while LDM-WB (ours) moves the front.</sub>
+    </td>
+  </tr>
+</table>
 
 We study multi-horizon forecasting of event sequences with heterogeneous (numerical and categorical) features as a conditional generative modeling problem, and evaluate forecasts not only for prediction accuracy but also for distributional realism. The benchmark comprises metrics for both aspects, strong statistical baselines, recent generative models adapted from adjacent fields, and curated real-world datasets. Each axis has a headline score and finer-grained metrics:
 - **Prediction accuracy**: the Temporal Matching Score (**TMS**) aggregates all features at once; matched and paired per-feature submetrics (R1 for time and amounts, F1 for categories) show where the error comes from.
 - **Distributional realism**: the Conditional Detection Fooling Score (**cDFS**) trains a history-aware discriminator; the discriminator-free Shape and Trend scores give a graded signal where cDFS saturates.
 
 Our evaluation shows that **no method excels at both accuracy and realism**. We also introduce **Wasserstein BaryBooster**, which aggregates samples from a realism-strong diffusion model into a state-of-the-art predictor, showing that distributional realism can be converted into prediction accuracy.
+
+---
 
 ### Model names
 
@@ -22,7 +32,7 @@ Our evaluation shows that **no method excels at both accuracy and realism**. We 
 | DEF | `detpp` |
 | LDM-WB | `ldm/vae/booster/wasserstein_barybooster1` |
 
-### Metrics
+### Metric names
 
 Metric names as they appear in `results.csv` (`<amount>`, `<time>`, `<category>` are dataset column names):
 
